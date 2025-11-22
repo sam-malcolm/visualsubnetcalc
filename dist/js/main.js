@@ -315,8 +315,11 @@ $('#calcbody').on('click', 'td.split,td.join', function(event) {
         // collapsed state for that subnet without changing the underlying data.
         mutate_subnet_map('collapse', this.dataset.subnet, '')
     } else {
-        mutate_subnet_map(this.dataset.mutateVerb, this.dataset.subnet, '')
-        this.dataset.subnet = sortIPCIDRs(this.dataset.subnet)
+        if (this.dataset.mutateVerb === 'join') {
+            join_subnet(this.dataset.subnet);
+        } else {
+            mutate_subnet_map(this.dataset.mutateVerb, this.dataset.subnet, '')
+        }
     }
 
     renderTable(operatingMode);
@@ -1386,3 +1389,59 @@ function sortIPCIDRs(obj) {
 }
 
 const rgba2hex = (rgba) => `#${rgba.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*(\d+\.{0,1}\d*))?\)$/).slice(1).map((n, i) => (i === 3 ? Math.round(parseFloat(n) * 255) : parseFloat(n)).toString(16).padStart(2, '0').replace('NaN', '')).join('')}`
+
+function join_subnet(targetCidr) {
+    let result = find_subnet_parent(subnetMap, targetCidr);
+    if (result) {
+        let [parentObj, key] = result;
+        let targetNode = parentObj[key];
+        
+        // Find the "Top Record" (first child by IP) to inherit properties from
+        let keys = Object.keys(targetNode).filter(k => !k.startsWith('_'));
+        keys.sort((a, b) => {
+             let ipA = ip2int(a.split('/')[0]);
+             let ipB = ip2int(b.split('/')[0]);
+             return ipA - ipB;
+        });
+
+        let newNote, newColor, newGroup;
+
+        if (keys.length > 0) {
+            let topChild = targetNode[keys[0]];
+            newNote = topChild['_note'];
+            newColor = topChild['_color'];
+            newGroup = topChild['_group'];
+        } else {
+            // Fallback to existing parent properties if no children found (edge case)
+            newNote = targetNode['_note'];
+            newColor = targetNode['_color'];
+            newGroup = targetNode['_group'];
+        }
+        
+        // Reset children
+        parentObj[key] = {}; 
+        
+        // Restore metadata from the top record
+        if (newNote) parentObj[key]['_note'] = newNote;
+        if (newColor) parentObj[key]['_color'] = newColor;
+        if (newGroup) parentObj[key]['_group'] = newGroup;
+        
+        return true;
+    }
+    return false;
+}
+
+function find_subnet_parent(currentMap, targetKey) {
+    if (currentMap.hasOwnProperty(targetKey)) {
+        return [currentMap, targetKey];
+    }
+    
+    for (let key in currentMap) {
+        if (key.startsWith('_')) continue;
+        if (has_network_sub_keys(currentMap[key])) {
+            let found = find_subnet_parent(currentMap[key], targetKey);
+            if (found) return found;
+        }
+    }
+    return null;
+}
