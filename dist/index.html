@@ -116,15 +116,41 @@
         </div>
     </form>
 
+    <div class="row g-2 mb-2" id="view_controls">
+        <div class="col-lg-4 col-md-6 col-12">
+            <label for="subnetSearch" class="form-label mb-0 ms-1">Search (CIDR, Group, Note)</label>
+            <input type="text"
+                   id="subnetSearch"
+                   class="form-control"
+                   aria-label="Search subnets by CIDR, group, or note"
+                   placeholder="e.g. 10.16.0.0/24 or UK South">
+        </div>
+        <div class="col-lg-3 col-md-4 col-7">
+            <label for="minMaskFilter" class="form-label mb-0 ms-1">Show up to size</label>
+            <div class="input-group">
+                <span class="input-group-text">/</span>
+                <input type="number"
+                       id="minMaskFilter"
+                       class="form-control"
+                       aria-label="Maximum subnet size (CIDR mask) to display"
+                       min="0"
+                       max="32"
+                       placeholder="(all)">
+            </div>
+            <div class="form-text">Only show subnets with a mask less than or equal to this value (hide smaller ranges).</div>
+        </div>
+    </div>
 
 
     <table id="calc" class="table table-bordered font-monospace" aria-label="Subnet Table">
         <thead>
             <tr>
                 <th aria-label="Subnet Address" id="subnetHeader" style="display: table-cell;">Subnet Address</th>
+                <th aria-label="Network Size" id="sizeHeader" style="display: table-cell;">Size</th>
                 <th aria-label="Range of Addresses" id="rangeHeader" style="display: table-cell;">Range of Addresses</th>
                 <th aria-label="Usable IPs" id="useableHeader" style="display: table-cell;">Usable IPs</th>
                 <th aria-label="Hosts" id="hostsHeader" style="display: table-cell;">Hosts</th>
+                <th aria-label="Group" id="groupHeader" style="display: table-cell;">Group</th>
                 <th aria-label="Note" id="noteHeader" colspan="100%" style="display: table-cell;">
                     Note
                     <div style="float:right;"><span id="splitHeader" aria-label="Split" class="split">Split</span>/<span id="joinHeader" aria-label="Join" class="join">Join</span></div>
@@ -134,9 +160,11 @@
         <tbody id="calcbody">
             <tr id="row_10-0-0-0_16" aria-label="10.0.0.0/16">
                 <td aria-labelledby="subnetHeader" class="row_address">Loading...</td>
+                <td aria-labelledby="sizeHeader" class="row_size"></td>
                 <td aria-labelledby="rangeHeader" class="row_range"></td>
                 <td aria-labelledby="useableHeader" class="row_usable"></td>
                 <td aria-labelledby="hostsHeader" class="row_hosts"></td>
+                <td class="group"><label><input aria-labelledby="groupHeader" type="text" class="form-control shadow-none p-0"></label></td>
                 <td class="note"><label><input aria-labelledby="noteHeader" type="text" class="form-control shadow-none p-0"></label></td>
                 <td aria-labelledby="splitHeader" rowspan="1" colspan="13" class="split rotate"><span></span></td>
                 <td aria-labelledby="joinHeader" rowspan="14" colspan="1" class="join rotate"><span></span></td>
@@ -158,6 +186,14 @@
             <div role="button" aria-label="Color 10" id="palette_picker_10"></div>
         </div>
         <div class="d-inline-block align-top align-top pt-1 ps-2 d-none" id="colors_word_close" aria-label="Stop Changing Colors"><span>&#171; Stop Changing Colors</span></div>
+        <div class="d-inline-block align-top pt-1 ps-3" id="selection_mode">
+            <span>Selection Mode:</span>
+            <div class="btn-group btn-group-sm ms-1" role="group" aria-label="Selection Mode">
+                <button type="button" class="btn btn-outline-secondary active" id="selection_mode_normal">Normal</button>
+                <button type="button" class="btn btn-outline-secondary" id="selection_mode_collapse">Collapse</button>
+                <button type="button" class="btn btn-outline-secondary" id="selection_mode_label">Label</button>
+            </div>
+        </div>
         <div class="d-inline-block align-top pt-1 ps-3" id="copy_url"><span>Copy Shareable URL</span></div>
         <div class="d-inline-block align-top pt-1 ps-3" id="whats_new">
             <a title="Released 2025-05-19" class="link-success" href="https://github.com/ckabalan/visualsubnetcalc/releases" target="_blank" rel="noopener noreferrer" aria-label="What's New">v1.4.0 (What's New?)</a>

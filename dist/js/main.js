@@ -1,7 +1,7 @@
 let subnetMap = {};
 let subnetNotes = {};
 let maxNetSize = 0;
-let infoColumnCount = 5
+let infoColumnCount = 6
 // NORMAL mode:
 //   - Smallest subnet: /32
 //   - Two reserved addresses per subnet of size <= 30:
@@ -30,9 +30,11 @@ let infoColumnCount = 5
 //     - Net+1 = OCI Reserved - Default Gateway Address
 //     - Last = Broadcast Address
 let noteTimeout;
+let groupTimeout;
 let operatingMode = 'Standard'
 let previousOperatingMode = 'Standard'
 let inflightColor = 'NONE'
+let selectionMode = 'normal'
 let urlVersion = '1'
 let configVersion = '2'
 
@@ -78,7 +80,16 @@ $('#color_palette div').on('click', function() {
 })
 
 $('#calcbody').on('click', '.row_address, .row_range, .row_usable, .row_hosts, .note, input', function(event) {
-    if (inflightColor !== 'NONE') {
+    // When in "collapse" selection mode (and not currently applying a color),
+    // clicking on a subnet row toggles the collapsed state for that subnet.
+    if (selectionMode === 'collapse' && inflightColor === 'NONE' && this.dataset.subnet) {
+        mutate_subnet_map('collapse', this.dataset.subnet, '')
+        renderTable(operatingMode);
+        return;
+    }
+
+    // Default behaviour: apply color when a palette color is selected.
+    if (inflightColor !== 'NONE' && this.dataset.subnet) {
         mutate_subnet_map('color', this.dataset.subnet, '', inflightColor)
         // We could re-render here, but there is really no point, keep performant and just change the background color now
         //renderTable();
@@ -158,6 +169,25 @@ $('#bottom_nav #colors_word_close').on('click', function() {
     inflightColor = 'NONE'
 })
 
+// Selection mode controls
+$('#selection_mode_normal').on('click', function() {
+    selectionMode = 'normal';
+    $('#selection_mode_normal, #selection_mode_collapse, #selection_mode_label').removeClass('active');
+    $('#selection_mode_normal').addClass('active');
+})
+
+$('#selection_mode_collapse').on('click', function() {
+    selectionMode = 'collapse';
+    $('#selection_mode_normal, #selection_mode_collapse, #selection_mode_label').removeClass('active');
+    $('#selection_mode_collapse').addClass('active');
+})
+
+$('#selection_mode_label').on('click', function() {
+    selectionMode = 'label';
+    $('#selection_mode_normal, #selection_mode_collapse, #selection_mode_label').removeClass('active');
+    $('#selection_mode_label').addClass('active');
+})
+
 $('#bottom_nav #copy_url').on('click', function() {
     // TODO: Provide a warning here if the URL is longer than 2000 characters, probably using a modal.
     let url = window.location.origin + getConfigUrl()
@@ -225,8 +255,70 @@ function isMatchingSize(subnet1, subnet2) {
 
 $('#calcbody').on('click', 'td.split,td.join', function(event) {
     // HTML DOM Data elements! Yay! See the `data-*` attributes of the HTML tags
-    mutate_subnet_map(this.dataset.mutateVerb, this.dataset.subnet, '')
-    this.dataset.subnet = sortIPCIDRs(this.dataset.subnet)
+    if (!this.dataset.subnet) {
+        return;
+    }
+
+    if (selectionMode === 'label') {
+        const subnet = this.dataset.subnet;
+        const currentLabel = get_subnet_property(subnet, '_group') || '';
+
+        // Remove any existing inline editors before creating a new one
+        $('#calcbody').find('input.label-editor').each(function() {
+            const $input = $(this);
+            const dataSubnet = $input.data('subnet');
+            const newValue = $input.val();
+            if (dataSubnet) {
+                mutate_subnet_map('group', dataSubnet, '', newValue);
+            }
+            $input.closest('td').data('editing', false);
+        }).remove();
+
+        const $cell = $(this);
+        if ($cell.data('editing')) {
+            return;
+        }
+        $cell.data('editing', true);
+
+        const $input = $('<input type="text" class="form-control form-control-sm label-editor" />');
+        $input.val(currentLabel);
+        $input.attr('data-subnet', subnet);
+
+        $cell.empty().append($input);
+        $input.focus().select();
+
+        const commitAndRender = () => {
+            const newValue = $input.val();
+            mutate_subnet_map('group', subnet, '', newValue);
+            $cell.data('editing', false);
+            renderTable(operatingMode);
+        };
+
+        $input.on('blur', function() {
+            commitAndRender();
+        });
+
+        $input.on('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                commitAndRender();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                $cell.data('editing', false);
+                renderTable(operatingMode);
+            }
+        });
+
+        return;
+    } else if (selectionMode === 'collapse') {
+        // In collapse mode, clicking the split/join area simply toggles the
+        // collapsed state for that subnet without changing the underlying data.
+        mutate_subnet_map('collapse', this.dataset.subnet, '')
+    } else {
+        mutate_subnet_map(this.dataset.mutateVerb, this.dataset.subnet, '')
+        this.dataset.subnet = sortIPCIDRs(this.dataset.subnet)
+    }
+
     renderTable(operatingMode);
 })
 
@@ -245,81 +337,266 @@ $('#calcbody').on('focusout', 'td.note input', function(event) {
     mutate_subnet_map('note', this.dataset.subnet, '', this.value)
 })
 
+$('#calcbody').on('keyup', 'td.group input', function(event) {
+    // Group labels are saved with a short debounce similar to notes
+    let delay = 1000;
+    clearTimeout(groupTimeout);
+    groupTimeout = setTimeout(function(element) {
+        mutate_subnet_map('group', element.dataset.subnet, '', element.value)
+    }, delay, this);
+})
+
+$('#calcbody').on('focusout', 'td.group input', function(event) {
+    clearTimeout(groupTimeout);
+    mutate_subnet_map('group', this.dataset.subnet, '', this.value)
+})
+
+$('#subnetSearch').on('input', function() {
+    applySubnetFilters();
+});
+
+$('#minMaskFilter').on('input change', function() {
+    // Re-render the table when the mask filter changes so that the
+    // visual split/join columns (colspans) stay consistent with the
+    // currently visible subnet sizes.
+    renderTable(operatingMode);
+});
+
 
 function renderTable(operatingMode) {
     // TODO: Validation Code
     $('#calcbody').empty();
-    let maxDepth = get_dict_max_depth(subnetMap, 0)
-    addRowTree(subnetMap, 0, maxDepth, operatingMode)
+
+    // 1. Flatten the subnet map into a sorted list of visible rows
+    //    Each row contains its own data + list of ancestors
+    const rows = getSubnetRows(subnetMap);
+
+    // 2. Identify all unique mask sizes present in the map (to define columns)
+    const sizes = new Set();
+    collect_mask_sizes(subnetMap, sizes);
+    const sortedSizes = Array.from(sizes).sort((a, b) => a - b);
+
+    // 3. Update the table header with these sizes
+    updateMaskHeader(sortedSizes);
+
+    // 4. Calculate rowspans for the "Join" columns
+    //    This modifies the 'rows' objects to include render instructions
+    calculateRenderPlan(rows, sortedSizes);
+
+    // 5. Render the rows
+    const maxDepth = get_dict_max_depth(subnetMap, 0); // Kept for Note width logic
+    rows.forEach(row => {
+        $('#calcbody').append(buildRowHtml(row, sortedSizes, maxDepth, operatingMode));
+    });
+
+    applySubnetFilters();
 }
 
-function addRowTree(subnetTree, depth, maxDepth, operatingMode) {
-    for (let mapKey in subnetTree) {
-        if (mapKey.startsWith('_')) { continue; }
-        if (has_network_sub_keys(subnetTree[mapKey])) {
-            addRowTree(subnetTree[mapKey], depth + 1, maxDepth,operatingMode)
+function getSubnetRows(subnetTree, ancestors = {}) {
+    let rows = [];
+
+    // Sort keys by IP
+    let keys = Object.keys(subnetTree).filter(k => !k.startsWith('_'));
+    keys.sort((a, b) => {
+        let ipA = ip2int(a.split('/')[0]);
+        let ipB = ip2int(b.split('/')[0]);
+        return ipA - ipB;
+    });
+
+    for (let mapKey of keys) {
+        const node = subnetTree[mapKey];
+        const isCollapsed = !!node['_collapsed'];
+        const hasChildren = has_network_sub_keys(node);
+        const [network, sizeStr] = mapKey.split('/');
+        const size = parseInt(sizeStr);
+
+        if (hasChildren && !isCollapsed) {
+            const newAncestors = { ...ancestors };
+            newAncestors[size] = mapKey;
+            rows = rows.concat(getSubnetRows(node, newAncestors));
         } else {
-            let subnet_split = mapKey.split('/')
-            let notesWidth = '30%';
-            if ((maxDepth > 5) && (maxDepth <= 10)) {
-                notesWidth = '25%';
-            } else if ((maxDepth > 10) && (maxDepth <= 15)) {
-                notesWidth = '20%';
-            } else if ((maxDepth > 15) && (maxDepth <= 20)) {
-                notesWidth = '15%';
-            } else if (maxDepth > 20) {
-                notesWidth = '10%';
-            }
-            addRow(subnet_split[0], parseInt(subnet_split[1]), (infoColumnCount + maxDepth - depth), (subnetTree[mapKey]['_note'] || ''), notesWidth, (subnetTree[mapKey]['_color'] || ''),operatingMode)
+            rows.push({
+                cidr: mapKey,
+                network: network,
+                netSize: size,
+                data: node,
+                ancestors: { ...ancestors },
+                hasChildren: hasChildren,
+                isCollapsed: isCollapsed
+            });
         }
     }
+    return rows;
 }
 
-function addRow(network, netSize, colspan, note, notesWidth, color, operatingMode) {
-    let addressFirst = ip2int(network)
-    let addressLast = subnet_last_address(addressFirst, netSize)
-    let usableFirst = subnet_usable_first(addressFirst, netSize, operatingMode)
-    let usableLast = subnet_usable_last(addressFirst, netSize)
-    let hostCount = 1 + usableLast - usableFirst
+function calculateRenderPlan(rows, sortedSizes) {
+    // Initialize 'renderCells' on each row.
+    rows.forEach(row => row.renderCells = {});
+
+    // For each column size
+    sortedSizes.forEach(size => {
+        let currentAncestor = null;
+        let startIndex = -1;
+        let spanCount = 0;
+
+        for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            const ancestorAtSize = row.ancestors[size]; // The CIDR string of the ancestor at this size
+
+            // Special Case: The row itself matches this size (It's the Split button)
+            if (row.netSize === size) {
+                row.renderCells[size] = { type: 'split' };
+                continue;
+            }
+
+            // Ancestor Logic
+            if (ancestorAtSize) {
+                if (ancestorAtSize !== currentAncestor) {
+                    // New block starting
+                    // 1. Commit previous block
+                    if (currentAncestor && startIndex !== -1) {
+                        rows[startIndex].renderCells[size] = { type: 'join', span: spanCount, cidr: currentAncestor };
+                    }
+
+                    // 2. Start new block
+                    currentAncestor = ancestorAtSize;
+                    startIndex = i;
+                    spanCount = 1;
+                } else {
+                    // Continuation
+                    spanCount++;
+                }
+            } else {
+                // No ancestor at this size (Gap/Spacer)
+                // Commit previous block
+                if (currentAncestor && startIndex !== -1) {
+                    rows[startIndex].renderCells[size] = { type: 'join', span: spanCount, cidr: currentAncestor };
+                }
+                currentAncestor = null;
+                startIndex = -1;
+                spanCount = 0;
+
+                // Mark as spacer
+                row.renderCells[size] = { type: 'spacer' };
+            }
+        }
+
+        // Commit final block
+        if (currentAncestor && startIndex !== -1) {
+            rows[startIndex].renderCells[size] = { type: 'join', span: spanCount, cidr: currentAncestor };
+        }
+    });
+}
+
+function buildRowHtml(row, sortedSizes, maxDepth, operatingMode) {
     let styleTag = ''
-    if (color !== '') {
-        styleTag = ' style="background-color: ' + color + '"'
+    if (row.data['_color']) {
+        styleTag = ' style="background-color: ' + row.data['_color'] + '"'
     }
 
-    let rangeCol, usableCol;
-    if (netSize < 32) {
-        rangeCol = int2ip(addressFirst) + ' - ' + int2ip(addressLast);
-        usableCol = int2ip(usableFirst) + ' - ' + int2ip(usableLast);
-    } else {
-        rangeCol = int2ip(addressFirst);
-        usableCol = int2ip(usableFirst);
-    }
-    let rowId = 'row_' + network.replace('.', '-') + '_' + netSize
-    let rowCIDR = network + '/' + netSize
-    let newRow =
-        '            <tr id="' + rowId + '"' + styleTag + '  aria-label="' + rowCIDR + '">\n' +
-        '                <td data-subnet="' + rowCIDR + '" aria-labelledby="' + rowId + ' subnetHeader" class="row_address">' + rowCIDR + '</td>\n' +
-        '                <td data-subnet="' + rowCIDR + '" aria-labelledby="' + rowId + ' rangeHeader" class="row_range">' + rangeCol + '</td>\n' +
-        '                <td data-subnet="' + rowCIDR + '" aria-labelledby="' + rowId + ' useableHeader" class="row_usable">' + usableCol + '</td>\n' +
-        '                <td data-subnet="' + rowCIDR + '" aria-labelledby="' + rowId + ' hostsHeader" class="row_hosts">' + hostCount + '</td>\n' +
-        '                <td class="note" style="width:' + notesWidth + '"><label><input aria-labelledby="' + rowId + ' noteHeader" type="text" class="form-control shadow-none p-0" data-subnet="' + rowCIDR + '" value="' + note + '"></label></td>\n' +
-        '                <td data-subnet="' + rowCIDR + '" aria-labelledby="' + rowId + ' splitHeader" rowspan="1" colspan="' + colspan + '" class="split rotate" data-mutate-verb="split"><span>/' + netSize + '</span></td>\n'
-    if (netSize > maxNetSize) {
-        // This is wrong. Need to figure out a way to get the number of children so you can set rowspan and the number
-        // of ancestors so you can set colspan.
-        // DONE: If the subnet address (without the mask) matches a larger subnet address
-        // in the heirarchy that is a signal to add more join buttons to that row, since they start at the top row and
-        // via rowspan extend downward.
-        let matchingNetworkList = get_matching_network_list(network, subnetMap).slice(1)
-        for (const i in matchingNetworkList) {
-            let matchingNetwork = matchingNetworkList[i]
-            let networkChildrenCount = count_network_children(matchingNetwork, subnetMap, [])
-            newRow += '                <td aria-label="' + matchingNetwork + ' Join" rowspan="' + networkChildrenCount + '" colspan="1" class="join rotate" data-subnet="' + matchingNetwork + '" data-mutate-verb="join"><span>/' + matchingNetwork.split('/')[1] + '</span></td>\n'
+    let addressFirst = ip2int(row.network)
+    let addressLast = subnet_last_address(addressFirst, row.netSize)
+    let usableFirst = subnet_usable_first(addressFirst, row.netSize, operatingMode)
+    let usableLast = subnet_usable_last(addressFirst, row.netSize)
+    let hostCount = 1 + usableLast - usableFirst
+    let rangeCol = (row.netSize < 32) ? int2ip(addressFirst) + ' - ' + int2ip(addressLast) : int2ip(addressFirst);
+    let usableCol = (row.netSize < 32) ? int2ip(usableFirst) + ' - ' + int2ip(usableLast) : int2ip(usableFirst);
+    let rowId = 'row_' + row.network.replace(/\./g, '-') + '_' + row.netSize
+    let splitLabel = (row.data['_group'] && row.data['_group'].trim() !== '') ? row.data['_group'] : '';
+    let collapseIndicator = row.hasChildren ? (row.isCollapsed ? '\u25b6' : '\u25bc') : '';
+
+    // Notes Width Calculation
+    let notesWidth = '30%';
+    if ((maxDepth > 5) && (maxDepth <= 10)) notesWidth = '25%';
+    else if ((maxDepth > 10) && (maxDepth <= 15)) notesWidth = '20%';
+    else if ((maxDepth > 15) && (maxDepth <= 20)) notesWidth = '15%';
+    else if (maxDepth > 20) notesWidth = '10%';
+
+    let html = `
+        <tr id="${rowId}"${styleTag} aria-label="${row.cidr}">
+            <td data-subnet="${row.cidr}" aria-labelledby="${rowId} subnetHeader" class="row_address">${row.cidr}</td>
+            <td data-subnet="${row.cidr}" aria-labelledby="${rowId} sizeHeader" class="row_size">/${row.netSize}</td>
+            <td data-subnet="${row.cidr}" aria-labelledby="${rowId} rangeHeader" class="row_range">${rangeCol}</td>
+            <td data-subnet="${row.cidr}" aria-labelledby="${rowId} useableHeader" class="row_usable">${usableCol}</td>
+            <td data-subnet="${row.cidr}" aria-labelledby="${rowId} hostsHeader" class="row_hosts">${hostCount}</td>
+            <td class="group"><label><input aria-labelledby="${rowId} groupHeader" type="text" class="form-control shadow-none p-0" data-subnet="${row.cidr}" value="${row.data['_group'] || ''}"></label></td>
+            <td class="note" style="width:${notesWidth}"><label><input aria-labelledby="${rowId} noteHeader" type="text" class="form-control shadow-none p-0" data-subnet="${row.cidr}" value="${row.data['_note'] || ''}"></label></td>
+    `;
+
+    // Render Columns
+    let splitRendered = false;
+    for (let i = 0; i < sortedSizes.length; i++) {
+        const size = sortedSizes[i];
+        const cell = row.renderCells[size];
+
+        if (splitRendered) break;
+
+        if (!cell) {
+            continue;
+        }
+
+        if (cell.type === 'join') {
+             let joinLabel = get_subnet_property(cell.cidr, '_group') || '';
+             html += `<td aria-label="${cell.cidr} Join" rowspan="${cell.span}" class="join rotate" data-subnet="${cell.cidr}" data-mutate-verb="join"><span>${joinLabel}</span></td>`;
+        } else if (cell.type === 'spacer') {
+             html += `<td></td>`;
+        } else if (cell.type === 'split') {
+             let colspan = sortedSizes.length - i;
+             html += `<td data-subnet="${row.cidr}" aria-labelledby="${rowId} splitHeader" rowspan="1" colspan="${colspan}" class="split rotate" data-mutate-verb="split"><span>${collapseIndicator}${splitLabel ? ' ' + splitLabel : ''}</span></td>`;
+             splitRendered = true;
         }
     }
-    newRow += '            </tr>';
 
-    $('#calcbody').append(newRow)
+    html += '</tr>';
+    return html;
+}
+
+function updateMaskHeader(sortedSizes) {
+    if (!sortedSizes) {
+        const sizes = new Set();
+        collect_mask_sizes(subnetMap, sizes);
+        sortedSizes = Array.from(sizes).sort((a, b) => a - b);
+    }
+
+    const splitHeader = $('#splitHeader');
+
+    if (!splitHeader.length) {
+        return;
+    }
+
+    if (sortedSizes.length === 0) {
+        splitHeader.text('Split');
+        return;
+    }
+
+    const headerText = sortedSizes.map(size => '/' + size).join(' ');
+    splitHeader.text(headerText);
+}
+
+function applySubnetFilters() {
+    const searchTerm = ($('#subnetSearch').val() || '').toString().toLowerCase().trim();
+    const maskFilterRaw = $('#minMaskFilter').val();
+    const maskFilter = maskFilterRaw === '' ? null : parseInt(maskFilterRaw, 10);
+
+    $('#calcbody tr').each(function() {
+        const $row = $(this);
+        const cidrText = ($row.find('.row_address').text() || '').toLowerCase();
+        const groupText = ($row.find('td.group input').val() || '').toLowerCase();
+        const noteText = ($row.find('td.note input').val() || '').toLowerCase();
+
+        const combinedText = cidrText + ' ' + groupText + ' ' + noteText;
+        const matchesSearch = !searchTerm || combinedText.indexOf(searchTerm) !== -1;
+
+        let matchesMask = true;
+        if (maskFilter !== null && !Number.isNaN(maskFilter)) {
+            const cidrParts = cidrText.split('/');
+            const maskPart = cidrParts.length === 2 ? parseInt(cidrParts[1], 10) : NaN;
+            // Show only subnets with mask <= selected value (hide smaller, more specific ranges)
+            matchesMask = !Number.isNaN(maskPart) ? (maskPart <= maskFilter) : true;
+        }
+
+        $row.toggle(matchesSearch && matchesMask);
+    });
 }
 
 
@@ -463,13 +740,51 @@ function subnet_usable_last(network, netSize) {
 
 function get_dict_max_depth(dict, curDepth) {
     let maxDepth = curDepth
+
+    // Take the current "Show up to size" filter into account so that
+    // hidden, more-specific subnets do not affect how wide the visual
+    // split/join columns are rendered.
+    const maskFilterRaw = $('#minMaskFilter').val();
+    const maskFilter = maskFilterRaw === '' ? null : parseInt(maskFilterRaw, 10);
+
     for (let mapKey in dict) {
         if (mapKey.startsWith('_')) { continue; }
+
+        // If a mask filter is set, ignore subnets that are more specific
+        // (larger prefix length) than the selected mask when calculating
+        // depth. Those rows will be hidden anyway.
+        if (maskFilter !== null) {
+            const parts = mapKey.split('/');
+            if (parts.length === 2) {
+                const size = parseInt(parts[1], 10);
+                if (!Number.isNaN(size) && size > maskFilter) {
+                    continue;
+                }
+            }
+        }
+
         let newDepth = get_dict_max_depth(dict[mapKey], curDepth + 1)
         if (newDepth > maxDepth) { maxDepth = newDepth }
     }
     return maxDepth
 }
+
+function collect_mask_sizes(dict, sizes) {
+    for (let mapKey in dict) {
+        if (mapKey.startsWith('_')) { continue; }
+        let parts = mapKey.split('/');
+        if (parts.length === 2) {
+            let size = parseInt(parts[1]);
+            if (!Number.isNaN(size)) {
+                sizes.add(size);
+            }
+        }
+        if (has_network_sub_keys(dict[mapKey])) {
+            collect_mask_sizes(dict[mapKey], sizes);
+        }
+    }
+}
+
 
 
 function get_join_children(subnetTree, childCount) {
@@ -487,7 +802,7 @@ function has_network_sub_keys(dict) {
     let allKeys = Object.keys(dict)
     // Maybe an efficient way to do this with a Lambda?
     for (let i in allKeys) {
-        if (!allKeys[i].startsWith('_') && allKeys[i] !== 'n' && allKeys[i] !== 'c') {
+        if (!allKeys[i].startsWith('_') && allKeys[i] !== 'n' && allKeys[i] !== 'c' && allKeys[i] !== 'g' && allKeys[i] !== 'x') {
             return true
         }
     }
@@ -496,12 +811,15 @@ function has_network_sub_keys(dict) {
 
 function count_network_children(network, subnetTree, ancestryList) {
     // TODO: This might be able to be optimized. Ultimately it needs to count the number of keys underneath
-    // the current key are unsplit networks (IE rows in the table, IE keys with a value of {}).
+    // the current key that are rendered as rows in the table. Collapsed networks are treated as a single row.
     let childCount = 0
     for (let mapKey in subnetTree) {
         if (mapKey.startsWith('_')) { continue; }
-        if (has_network_sub_keys(subnetTree[mapKey])) {
-            childCount += count_network_children(network, subnetTree[mapKey], ancestryList.concat([mapKey]))
+        const node = subnetTree[mapKey];
+        const isCollapsed = !!node['_collapsed'];
+
+        if (has_network_sub_keys(node) && !isCollapsed) {
+            childCount += count_network_children(network, node, ancestryList.concat([mapKey]))
         } else {
             if (ancestryList.includes(network)) {
                 childCount += 1
@@ -517,13 +835,34 @@ function get_network_children(network, subnetTree) {
     let subnetList = []
     for (let mapKey in subnetTree) {
         if (mapKey.startsWith('_')) { continue; }
-        if (has_network_sub_keys(subnetTree[mapKey])) {
-            subnetList.push.apply(subnetList, get_network_children(network, subnetTree[mapKey]))
+        const node = subnetTree[mapKey];
+        const isCollapsed = !!node['_collapsed'];
+        if (has_network_sub_keys(node) && !isCollapsed) {
+            subnetList.push.apply(subnetList, get_network_children(network, node))
         } else {
             subnetList.push(mapKey)
         }
     }
     return subnetList
+}
+
+function get_subnet_property(network, property, subnetTree) {
+    if (subnetTree === undefined || subnetTree === null || subnetTree === '') {
+        subnetTree = subnetMap;
+    }
+
+    for (let mapKey in subnetTree) {
+        if (mapKey.startsWith('_')) { continue; }
+        if (mapKey === network) {
+            return subnetTree[mapKey][property] || '';
+        }
+        if (has_network_sub_keys(subnetTree[mapKey])) {
+            const result = get_subnet_property(network, property, subnetTree[mapKey]);
+            if (result !== undefined) {
+                return result;
+            }
+        }
+    }
 }
 
 function get_matching_network_list(network, subnetTree) {
@@ -597,19 +936,15 @@ function mutate_subnet_map(verb, network, subnetTree, propValue = '') {
                     // Could maybe optimize this for readability with some null coalescing
                     subnetTree[mapKey][new_networks[0]] = {}
                     subnetTree[mapKey][new_networks[1]] = {}
-                    // Options:
-                    //   [ Selected ] Copy note to both children and delete parent note
-                    //   [ Possible ] Blank out the new and old subnet notes
+                    // Copy note / color / group to children but KEEP it on the parent so all hierarchy levels can be labeled.
                     if (subnetTree[mapKey].hasOwnProperty('_note')) {
                         subnetTree[mapKey][new_networks[0]]['_note'] = subnetTree[mapKey]['_note']
                         subnetTree[mapKey][new_networks[1]]['_note'] = subnetTree[mapKey]['_note']
                     }
-                    delete subnetTree[mapKey]['_note']
                     if (subnetTree[mapKey].hasOwnProperty('_color')) {
                         subnetTree[mapKey][new_networks[0]]['_color'] = subnetTree[mapKey]['_color']
                         subnetTree[mapKey][new_networks[1]]['_color'] = subnetTree[mapKey]['_color']
                     }
-                    delete subnetTree[mapKey]['_color']
                 } else {
                     switch (operatingMode) {
                         case 'AWS':
@@ -633,14 +968,40 @@ function mutate_subnet_map(verb, network, subnetTree, propValue = '') {
                 //   [ Possible ] Lose note data for all deleted subnets.
                 //   [ Possible ] Keep note from first subnet in the join scope. Reasonable but I think rarely will the note be kept by the user
                 //   [ Possible ] Concatenate all notes. Ugly and won't really be useful for more than two subnets being joined
-                subnetTree[mapKey] = {
-                    '_note': get_consolidated_property(subnetTree[mapKey], '_note'),
-                    '_color': get_consolidated_property(subnetTree[mapKey], '_color')
+                const consolidatedNote = get_consolidated_property(subnetTree[mapKey], '_note');
+                const consolidatedColor = get_consolidated_property(subnetTree[mapKey], '_color');
+                const consolidatedGroup = get_consolidated_property(subnetTree[mapKey], '_group');
+                
+                const parentNote = subnetTree[mapKey]['_note'];
+                const parentColor = subnetTree[mapKey]['_color'];
+                const parentGroup = subnetTree[mapKey]['_group'];
+
+                subnetTree[mapKey] = {};
+                if (consolidatedNote !== '') {
+                    subnetTree[mapKey]['_note'] = consolidatedNote;
+                } else if (parentNote) {
+                    subnetTree[mapKey]['_note'] = parentNote;
+                }
+
+                if (consolidatedColor !== '') {
+                    subnetTree[mapKey]['_color'] = consolidatedColor;
+                } else if (parentColor) {
+                    subnetTree[mapKey]['_color'] = parentColor;
+                }
+
+                if (consolidatedGroup !== '') {
+                    subnetTree[mapKey]['_group'] = consolidatedGroup;
+                } else if (parentGroup) {
+                    subnetTree[mapKey]['_group'] = parentGroup;
                 }
             } else if (verb === 'note') {
                 subnetTree[mapKey]['_note'] = propValue
             } else if (verb === 'color') {
                 subnetTree[mapKey]['_color'] = propValue
+            } else if (verb === 'group') {
+                subnetTree[mapKey]['_group'] = propValue
+            } else if (verb === 'collapse') {
+                subnetTree[mapKey]['_collapsed'] = !subnetTree[mapKey]['_collapsed']
             } else {
                 // How did you get here?
             }
@@ -907,6 +1268,12 @@ function minifySubnetMap(minifiedMap, referenceMap, baseNetwork) {
         if (referenceMap[subnet].hasOwnProperty('_color')) {
             minifiedMap[nthRepresentation]['c'] = referenceMap[subnet]['_color']
         }
+        if (referenceMap[subnet].hasOwnProperty('_group')) {
+            minifiedMap[nthRepresentation]['g'] = referenceMap[subnet]['_group']
+        }
+        if (referenceMap[subnet].hasOwnProperty('_collapsed')) {
+            minifiedMap[nthRepresentation]['x'] = referenceMap[subnet]['_collapsed'] ? 1 : 0
+        }
         if (Object.keys(referenceMap[subnet]).some(key => !key.startsWith('_'))) {
             minifySubnetMap(minifiedMap[nthRepresentation], referenceMap[subnet], baseNetwork);
         }
@@ -915,7 +1282,7 @@ function minifySubnetMap(minifiedMap, referenceMap, baseNetwork) {
 
 function expandSubnetMap(expandedMap, miniMap, baseNetwork) {
     for (let mapKey in miniMap) {
-        if (mapKey === 'n' || mapKey === 'c') {
+        if (mapKey === 'n' || mapKey === 'c' || mapKey === 'g' || mapKey === 'x') {
             continue;
         }
         let subnetKey = getSubnetFromNth(baseNetwork, mapKey)
@@ -928,6 +1295,12 @@ function expandSubnetMap(expandedMap, miniMap, baseNetwork) {
             }
             if (miniMap[mapKey].hasOwnProperty('c')) {
                 expandedMap[subnetKey]['_color'] = miniMap[mapKey]['c']
+            }
+            if (miniMap[mapKey].hasOwnProperty('g')) {
+                expandedMap[subnetKey]['_group'] = miniMap[mapKey]['g']
+            }
+            if (miniMap[mapKey].hasOwnProperty('x')) {
+                expandedMap[subnetKey]['_collapsed'] = !!miniMap[mapKey]['x']
             }
         }
     }

@@ -51,6 +51,10 @@
     border-bottom:1px black dotted;
 }
 
+#selection_mode {
+    white-space: nowrap;
+}
+
 #whats_new {
     cursor:pointer !important;
     text-align: right;
@@ -212,6 +216,21 @@
 
 #calc td.split span, #calc td.join span {
     padding-right: 0.4rem;
+}
+
+#calc td.split .label-editor,
+#calc td.join .label-editor {
+    border: none !important;
+    background-color: transparent;
+    color: inherit;
+    padding: 0;
+    margin: 0;
+    width: 100%;
+    -ms-writing-mode: tb-rl;
+    -webkit-writing-mode: vertical-rl;
+    writing-mode: vertical-rl;
+    white-space: nowrap;
+    font-size: 0.9rem;
 }
 #calc .note {
     padding-left:0.5rem;
