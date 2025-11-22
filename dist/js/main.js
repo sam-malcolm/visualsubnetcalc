@@ -374,7 +374,7 @@ function renderTable(operatingMode) {
     // 2. Identify all unique mask sizes present in the map (to define columns)
     const sizes = new Set();
     collect_mask_sizes(subnetMap, sizes);
-    const sortedSizes = Array.from(sizes).sort((a, b) => a - b);
+    const sortedSizes = Array.from(sizes).sort((a, b) => b - a);
 
     // 3. Update the table header with these sizes
     updateMaskHeader(sortedSizes);
@@ -524,12 +524,9 @@ function buildRowHtml(row, sortedSizes, maxDepth, operatingMode) {
     `;
 
     // Render Columns
-    let splitRendered = false;
     for (let i = 0; i < sortedSizes.length; i++) {
         const size = sortedSizes[i];
         const cell = row.renderCells[size];
-
-        if (splitRendered) break;
 
         if (!cell) {
             continue;
@@ -541,9 +538,8 @@ function buildRowHtml(row, sortedSizes, maxDepth, operatingMode) {
         } else if (cell.type === 'spacer') {
              html += `<td></td>`;
         } else if (cell.type === 'split') {
-             let colspan = sortedSizes.length - i;
+             let colspan = 1;
              html += `<td data-subnet="${row.cidr}" aria-labelledby="${rowId} splitHeader" rowspan="1" colspan="${colspan}" class="split rotate" data-mutate-verb="split"><span>${collapseIndicator}${splitLabel ? ' ' + splitLabel : ''}</span></td>`;
-             splitRendered = true;
         }
     }
 
